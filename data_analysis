@@ -1,0 +1,434 @@
+# ===========================================
+# Step 1. 載入套件與中文字體設定
+# ===========================================
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split # 劃分數據集
+from sklearn.feature_selection import mutual_info_classif # 新增：用於計算互信息
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+from matplotlib.backends.backend_pdf import PdfPages
+from openpyxl import load_workbook # Excel 寫入套件
+
+# --- 中文字體設定 (解決圖表中文顯示問題) ---
+# 嘗試設定優先使用微軟正黑體，否則使用預設
+plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DejaVu Sans', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False # 解決負號'-'顯示為方塊的問題
+print("✅ Matplotlib 中文字體設定完成。")
+
+# ===========================================
+# Step 2. 資料載入
+# ===========================================
+print("\n--- 2. 資料載入 ---")
+# 嘗試從桌面讀取 Excel
+desktop_path = os.path.expanduser("~/Desktop/data.xlsx")
+
+if os.path.exists(desktop_path):
+    print("✅ 檔案存在，使用 pd.read_excel 讀取資料 (桌面)...")
+    df = pd.read_excel(desktop_path)
+    # 設定 Excel 輸出路徑
+    excel_output_path = os.path.expanduser("~/Desktop/Ocular_Disease_Data_and_Results.xlsx")
+else:
+    print("❌ 找不到本地 data.xlsx (桌面)，嘗試載入上傳的檔案 'data.xlsx - Sheet1.csv'。")
+    try:
+        # 嘗試用 utf-8 讀取 CSV
+        df = pd.read_csv('data.xlsx - Sheet1.csv', encoding='utf-8')
+    except:
+        # 嘗試用 gbk 讀取 CSV
+        df = pd.read_csv('data.xlsx - Sheet1.csv', encoding='gbk')
+    print("✅ 檔案已讀取。請注意：由於未找到桌面 Excel，分析結果將儲存到一個模擬的 Excel 路徑。")
+    excel_output_path = os.path.expanduser("~/Desktop/Ocular_Disease_Data_and_Results.xlsx")
+
+
+print(f"📊 載入資料筆數：{len(df)} 筆")
+
+# 原始程式碼中的過濾條件
+df = df[df["N"] == 0]
+print("✅ 篩選 'N = 0' 後的資料筆數:", len(df))
+
+# 定義疾病欄位，確保後續步驟使用的欄位一致
+disease_cols = ["N", "D", "G", "C", "A", "H", "M", "O"]
+
+
+# ===========================================
+# Step 3. 缺失值處理
+# ===========================================
+print("\n--- 3. 缺失值處理 ---")
+# 年齡用平均值補，疾病欄位缺失視為0
+df["Patient Age"] = df["Patient Age"].fillna(df["Patient Age"].mean())
+
+for col in disease_cols:
+    df[col] = df[col].fillna(0)
+
+
+# ===========================================
+# Step 4. 異常值處理 (以平均數 ± 3*標準差偵測年齡極端值)
+# ===========================================
+print("\n--- 4. 年齡異常值處理 ---")
+mean_age = df["Patient Age"].mean()
+std_age = df["Patient Age"].std()
+
+lower = mean_age - 3 * std_age
+upper = mean_age + 3 * std_age
+
+df = df[(df["Patient Age"] >= lower) & (df["Patient Age"] <= upper)]
+print("✅ 移除異常值後筆數:", len(df))
+
+# 重新計算統計量 (用於報告)
+mean_age = df["Patient Age"].mean()
+std_age = df["Patient Age"].std()
+
+print(f"👉 算術平均數(mean):{mean_age:.2f}")
+print(f"👉 標準差(std):{std_age:.2f}")
+
+
+# ===========================================
+# Step 5. 編碼處理(保證0與1)
+# ===========================================
+print("\n--- 5. 疾病欄位編碼 ---")
+for col in disease_cols:
+    df[col] = df[col].apply(lambda x: 1 if x == 1 else 0)
+
+
+# ===========================================
+# Step 6. 數據集劃分 (訓練集/測試集 80/20)
+# ===========================================
+print("\n--- 6. 數據集劃分 (訓練集/測試集 80/20) ---")
+
+# 特徵 (X): 使用尚未標準化的 Patient Age 作為主要數值特徵
+X_pre_split = df[['Patient Age']].copy() 
+
+# 目標變數 (Y): 疾病代號 (D, G, C, A, H, M, O)
+analysis_cols = [col for col in disease_cols if col != "N"]
+Y_pre_split = df[analysis_cols].copy() 
+
+# 劃分數據集
+X_train, X_test, y_train, y_test = train_test_split(
+    X_pre_split, 
+    Y_pre_split, 
+    test_size=0.2,       # 調整為 20% 為測試集
+    random_state=42,     # 固定種子確保結果可重現
+    shuffle=True         # 預設為 True
+)
+
+print(f"✅ 訓練集大小: {len(X_train)} 筆 (80%)")
+print(f"✅ 測試集大小: {len(X_test)} 筆 (20%)")
+
+
+# ===========================================
+# Step 7. 歸一化處理(將年齡標準化) <--- 標準化移到劃分之後
+# ===========================================
+print("\n--- 7. 年齡標準化 (Z-score) ---")
+scaler = StandardScaler()
+
+# 1. 對完整 df 進行標準化 (用於後續 EDA 步驟 10, 11, 12 的熱力圖/相關性分析)
+# 注意：這會讓 EDA 使用的 df 產生數據洩露，但這是為了方便 EDA 視覺化。
+df["Patient Age_z"] = scaler.fit_transform(df[["Patient Age"]])
+print("註 1: 完整數據集的標準化 (df['Patient Age_z']) 已完成，用於 EDA。")
+
+
+# 2. 對 X_train/X_test 進行標準化 (用於 ML 模型)
+# **關鍵：只用 X_train fit scaler，然後 transform X_test**
+scaler_ml = StandardScaler()
+X_train_scaled = scaler_ml.fit_transform(X_train)
+X_test_scaled = scaler_ml.transform(X_test)
+
+# X_train_scaled, X_test_scaled, y_train, y_test 已準備好用於機器學習模型訓練。
+print("註 2: 訓練集特徵 (X_train_scaled) 和測試集特徵 (X_test_scaled) 已完成標準化，無數據洩露，用於模型訓練。")
+
+
+# ===========================================
+# Step 8. 年齡分組
+# ===========================================
+print("\n--- 8. 年齡分組 ---")
+def age_group(age):
+    if 0 <= age <= 14:
+        return 'Juvenile (0-14)'
+    elif 15 <= age <= 64:
+        return 'Adult (15-64)'
+    else: # age >= 65
+        return 'Elderly (65+)'
+
+# 建立新的年齡組別欄位
+df['Age_Group'] = df['Patient Age'].apply(age_group)
+
+print("✅ 年齡分組結果統計:")
+print(df['Age_Group'].value_counts().sort_index().to_markdown())
+
+
+# ===========================================
+# PDF 報告生成初始化 (所有圖表將匯入此檔案)
+# ===========================================
+pdf_filepath = os.path.expanduser("~/Desktop/Ocular_Disease_Analysis_Report.pdf")
+pdf_pages = PdfPages(pdf_filepath)
+print(f"\n--- 報告生成初始化：圖表將匯入 PDF 報告: {pdf_filepath} ---")
+
+
+# ===========================================
+# Step 9. 相關係數分析與熱力圖 (整體數據)
+# ===========================================
+print("\n--- 9. 數值特徵相關係數分析 (連續年齡) ---")
+# 只取數值型欄位
+num_df = df.select_dtypes(include='number')
+
+# 排除 ID 與原始 Patient Age (Patient Age_z 應保留)
+try:
+    num_df = num_df.drop(columns=['ID', 'Patient Age'])
+except KeyError:
+    num_df = num_df.drop(columns=['Patient Age'], errors='ignore')
+
+# 計算皮爾森相關係數
+corr = num_df.corr()
+
+# 畫熱力圖
+fig_9 = plt.figure(figsize=(10, 8)) # Use explicit fig object
+sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title("Feature Correlation Heatmap (Overall Data)") # 英文標題
+plt.tight_layout()
+pdf_pages.savefig(fig_9) # Save to PDF
+plt.close(fig_9) # Close figure
+
+
+# ===========================================
+# Step 10. 年齡組別與疾病發生率交叉分析 (年齡層差異)
+# ===========================================
+print("\n--- 10. 年齡組別 vs. 疾病發生率分析 ---")
+
+# 執行分組聚合：計算每個年齡組別中，每個疾病的平均值 (即發生率)
+# analysis_cols 已在 Step 6 定義
+age_disease_crosstab = df.groupby('Age_Group')[analysis_cols].mean().reset_index()
+
+# 設定年齡組別的顯示順序
+group_order = ['Juvenile (0-14)', 'Adult (15-64)', 'Elderly (65+)']
+age_disease_crosstab['Age_Group'] = pd.Categorical(
+    age_disease_crosstab['Age_Group'],
+    categories=group_order,
+    ordered=True
+)
+age_disease_crosstab = age_disease_crosstab.sort_values('Age_Group')
+
+print("\n✅ 年齡組別 vs. 疾病平均發生率 (0~1):")
+print(age_disease_crosstab.to_markdown(index=False, floatfmt=".3f"))
+
+
+# --- 視覺化年齡組別影響 (Bar Plot) ---
+melted_df = age_disease_crosstab.melt(
+    id_vars='Age_Group',
+    value_vars=analysis_cols,
+    var_name='Disease_Code',
+    value_name='Prevalence'
+)
+
+fig_10 = plt.figure(figsize=(12, 6)) # Use explicit fig object
+sns.barplot(
+    data=melted_df,
+    x='Disease_Code',
+    y='Prevalence',
+    hue='Age_Group',
+    palette='viridis'
+)
+plt.title('Average Ocular Disease Prevalence by Age Group') # 英文標題
+plt.ylabel('Average Prevalence') # 英文 Y 軸標籤
+plt.xlabel('Disease Code (D, G, C, A, H, M, O)') # 英文 X 軸標籤
+plt.legend(title='Age Group') # 英文圖例標題
+plt.grid(axis='y', linestyle='--')
+plt.tight_layout()
+pdf_pages.savefig(fig_10) # Save to PDF
+plt.close(fig_10) # Close figure
+
+
+# ===========================================
+# Step 11. 分組相關係數熱力圖 (新增)
+# ===========================================
+print("\n--- 11. 分組相關係數熱力圖 (分組內年齡影響) ---")
+
+# 移除 Patient Age_z，因為分組內我們使用原始 Patient Age 進行相關性分析，
+# 這樣更能反映該年齡層內年齡增長的實際影響。
+try:
+    analysis_df = df.drop(columns=['ID', 'Patient Age_z'], errors='ignore')
+except KeyError:
+    analysis_df = df.drop(columns=['Patient Age_z'], errors='ignore')
+analysis_df = analysis_df.select_dtypes(include=['number', 'object'])
+
+
+# 定義要生成的組別
+group_names = ['Adult (15-64)', 'Elderly (65+)']
+
+fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+# 英文總標題
+fig.suptitle('Feature Correlation Heatmap within Age Groups (Patient Age reflects intra-group growth)', y=1.02, fontsize=16) 
+
+for i, group in enumerate(group_names):
+    # 篩選資料
+    group_df = analysis_df[analysis_df['Age_Group'] == group]
+
+    # 只保留數值欄位 (包括 Patient Age 和疾病欄位)
+    num_group_df = group_df.select_dtypes(include='number')
+
+    # 計算組內相關係數
+    group_corr = num_group_df.corr()
+
+    # 畫熱力圖
+    sns.heatmap(
+        group_corr,
+        annot=True,
+        cmap='coolwarm',
+        fmt=".2f",
+        ax=axes[i],
+        vmin=-1, # 統一色階範圍
+        vmax=1
+    )
+    # 英文子圖標題
+    axes[i].set_title(f"Group: {group} (N: {len(group_df)})") 
+
+plt.tight_layout()
+pdf_pages.savefig(fig) # Save to PDF using the defined 'fig' object
+plt.close(fig) # Close figure
+
+
+# ===========================================
+# Step 12. 特徵香農亂度 (Shannon Entropy) 分析與視覺化
+# ===========================================
+print("\n--- 12. 特徵香農亂度 (Entropy) 分析 ---")
+
+def calculate_shannon_entropy(series):
+    """計算 Pandas Series 的 Shannon Entropy (基數為 2)。"""
+    # 適用於二元 (0/1) 特徵
+    if series.dtype in ['int64', 'float64'] and series.nunique() <= 2:
+        # p 即為 1 的發生率 (Prevalence)
+        p = series.mean()
+        if p == 0 or p == 1:
+            return 0.0
+        # H(p) = -(p * log2(p) + (1-p) * log2(1-p))
+        entropy = - (p * np.log2(p) + (1 - p) * np.log2(1 - p))
+        return entropy
+    else:
+        # 適用於多分類特徵
+        probabilities = series.value_counts(normalize=True)
+        # 排除概率為 0 的情況，避免 log2(0) 錯誤
+        probabilities = probabilities[probabilities > 0]
+        # H(X) = - sum(P(x_i) * log2(P(x_i)))
+        entropy = - (probabilities * np.log2(probabilities)).sum()
+        return entropy
+
+entropy_results = {}
+
+# 1. 只計算疾病欄位 (二元特徵) 的亂度
+for col in analysis_cols:
+    entropy_results[col] = calculate_shannon_entropy(df[col])
+
+# 將結果轉換為 DataFrame 以便視覺化
+entropy_df = pd.DataFrame(
+    list(entropy_results.items()),
+    columns=['Feature', 'Entropy']
+)
+
+# 排序，讓亂度最高的在前面
+entropy_df = entropy_df.sort_values(by='Entropy', ascending=False)
+
+print("\n✅ 特徵香農亂度結果:")
+print(entropy_df.to_markdown(index=False, floatfmt=".4f"))
+
+# --- 視覺化亂度長條圖 ---
+fig_12 = plt.figure(figsize=(10, 6)) # Use explicit fig object
+sns.barplot(
+    data=entropy_df,
+    x='Entropy',
+    y='Feature',
+    palette='magma'
+)
+plt.title('Shannon Entropy of Ocular Disease Features (Base 2)', fontsize=16) # 英文標題
+plt.xlabel('Entropy Value (Base 2)') # 英文 X 軸標籤
+plt.ylabel('Disease Feature') # 英文 Y 軸標籤
+plt.grid(axis='x', linestyle='--')
+plt.tight_layout()
+pdf_pages.savefig(fig_12) # Save to PDF
+plt.close(fig_12) # Close figure
+
+
+# ===========================================
+# Step 13. 年齡與疾病的互信息 (Mutual Information) 分析 (連續年齡)
+# ===========================================
+print("\n--- 13. 年齡與疾病的互信息 (Mutual Information) 分析 ---")
+
+# Mutual Information 計算
+# MI 衡量連續的 'Patient Age' (X) 對預測二元疾病 (Y) 能提供多少信息量。
+mi_results = {}
+X_age = df[['Patient Age']]
+
+print("計算 Patient Age (連續) 與各疾病 (二元) 的互信息...")
+for col in analysis_cols:
+    y_disease = df[col]
+    
+    # mutual_info_classif 適用於連續 X 和分類 Y
+    mi_score = mutual_info_classif(X_age, y_disease, random_state=42)[0]
+    mi_results[col] = mi_score
+
+# 將結果轉換為 DataFrame 以便視覺化
+mi_df = pd.DataFrame(
+    list(mi_results.items()),
+    columns=['Disease Feature', 'Mutual Information (MI)']
+)
+mi_df = mi_df.sort_values(by='Mutual Information (MI)', ascending=False)
+
+print("\n✅ 年齡與疾病互信息結果:")
+print(mi_df.to_markdown(index=False, floatfmt=".4f"))
+
+
+# --- 視覺化互信息長條圖 ---
+fig_13 = plt.figure(figsize=(10, 6)) # Use explicit fig object
+sns.barplot(
+    data=mi_df,
+    x='Mutual Information (MI)',
+    y='Disease Feature',
+    palette='Spectral'
+)
+plt.title('Mutual Information between Patient Age and Disease Features', fontsize=16) 
+plt.xlabel('Mutual Information Value') 
+plt.ylabel('Disease Feature') 
+plt.grid(axis='x', linestyle='--')
+plt.tight_layout()
+pdf_pages.savefig(fig_13) # Save to PDF
+plt.close(fig_13) # Close figure
+
+# ===========================================
+# Step 14. 將處理後的資料和分析結果輸出到 Excel
+# ===========================================
+print(f"\n--- 15. 將結果輸出到 Excel 報告: {excel_output_path} ---")
+
+# 選擇要輸出的最終數據欄位
+cleaned_data_cols = ['Patient Age', 'Patient Age_z', 'Age_Group'] + disease_cols
+cleaned_data_df = df[cleaned_data_cols].copy()
+
+# *** 修正：明確指定 engine='openpyxl' 來解決 ModuleNotFoundError: No module named 'xlsxwriter' ***
+with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+    # 1. 處理後的數據集
+    cleaned_data_df.to_excel(
+        writer, 
+        sheet_name='Cleaned Data', 
+        index=False,
+        float_format="%.4f"
+    )
+    print("✅ 工作表 'Cleaned Data' (處理後的資料集) 寫入完成。")
+
+    # 2. 香農亂度結果
+    entropy_df.to_excel(
+        writer, 
+        sheet_name='Entropy Results', 
+        index=False,
+        float_format="%.4f"
+    )
+    print("✅ 工作表 'Entropy Results' (香農亂度) 寫入完成。")
+
+    # 3. 互信息結果
+    mi_df.to_excel(
+        writer, 
+        sheet_name='MI Results', 
+        index=False,
+        float_format="%.4f"
+    )
+    print("✅ 工作表 'MI Results' (年齡互信息) 寫入完成。")
+
+print("🎉 數據處理和分析結果已同步輸出至 Excel 檔案中。")
