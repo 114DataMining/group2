@@ -6,10 +6,10 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split # 劃分數據集
 from sklearn.feature_selection import mutual_info_classif # 新增：用於計算互信息
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # 僅用於顯示圖表 (如果需要)
 import seaborn as sns
 import os
-from matplotlib.backends.backend_pdf import PdfPages
+# from matplotlib.backends.backend_pdf import PdfPages # 已移除 PDF 匯入
 from openpyxl import load_workbook # Excel 寫入套件
 
 # --- 中文字體設定 (解決圖表中文顯示問題) ---
@@ -159,14 +159,6 @@ print(df['Age_Group'].value_counts().sort_index().to_markdown())
 
 
 # ===========================================
-# PDF 報告生成初始化 (所有圖表將匯入此檔案)
-# ===========================================
-pdf_filepath = os.path.expanduser("~/Desktop/Ocular_Disease_Analysis_Report.pdf")
-pdf_pages = PdfPages(pdf_filepath)
-print(f"\n--- 報告生成初始化：圖表將匯入 PDF 報告: {pdf_filepath} ---")
-
-
-# ===========================================
 # Step 9. 相關係數分析與熱力圖 (整體數據)
 # ===========================================
 print("\n--- 9. 數值特徵相關係數分析 (連續年齡) ---")
@@ -182,13 +174,14 @@ except KeyError:
 # 計算皮爾森相關係數
 corr = num_df.corr()
 
-# 畫熱力圖
-fig_9 = plt.figure(figsize=(10, 8)) # Use explicit fig object
+# 畫熱力圖 (只顯示，不儲存到 PDF)
+fig_9 = plt.figure(figsize=(10, 8)) 
 sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f")
-plt.title("Feature Correlation Heatmap (Overall Data)") # 英文標題
+plt.title("Feature Correlation Heatmap (Overall Data)") 
 plt.tight_layout()
-pdf_pages.savefig(fig_9) # Save to PDF
-plt.close(fig_9) # Close figure
+# 移除 pdf_pages.savefig(fig_9)
+plt.show() # 新增：執行時顯示圖表
+plt.close(fig_9) 
 
 
 # ===========================================
@@ -221,7 +214,7 @@ melted_df = age_disease_crosstab.melt(
     value_name='Prevalence'
 )
 
-fig_10 = plt.figure(figsize=(12, 6)) # Use explicit fig object
+fig_10 = plt.figure(figsize=(12, 6)) 
 sns.barplot(
     data=melted_df,
     x='Disease_Code',
@@ -229,14 +222,15 @@ sns.barplot(
     hue='Age_Group',
     palette='viridis'
 )
-plt.title('Average Ocular Disease Prevalence by Age Group') # 英文標題
-plt.ylabel('Average Prevalence') # 英文 Y 軸標籤
-plt.xlabel('Disease Code (D, G, C, A, H, M, O)') # 英文 X 軸標籤
-plt.legend(title='Age Group') # 英文圖例標題
+plt.title('Average Ocular Disease Prevalence by Age Group') 
+plt.ylabel('Average Prevalence') 
+plt.xlabel('Disease Code (D, G, C, A, H, M, O)') 
+plt.legend(title='Age Group') 
 plt.grid(axis='y', linestyle='--')
 plt.tight_layout()
-pdf_pages.savefig(fig_10) # Save to PDF
-plt.close(fig_10) # Close figure
+# 移除 pdf_pages.savefig(fig_10) 
+plt.show() # 新增：執行時顯示圖表
+plt.close(fig_10) 
 
 
 # ===========================================
@@ -284,8 +278,9 @@ for i, group in enumerate(group_names):
     axes[i].set_title(f"Group: {group} (N: {len(group_df)})") 
 
 plt.tight_layout()
-pdf_pages.savefig(fig) # Save to PDF using the defined 'fig' object
-plt.close(fig) # Close figure
+# 移除 pdf_pages.savefig(fig) 
+plt.show() # 新增：執行時顯示圖表
+plt.close(fig) 
 
 
 # ===========================================
@@ -332,20 +327,21 @@ print("\n✅ 特徵香農亂度結果:")
 print(entropy_df.to_markdown(index=False, floatfmt=".4f"))
 
 # --- 視覺化亂度長條圖 ---
-fig_12 = plt.figure(figsize=(10, 6)) # Use explicit fig object
+fig_12 = plt.figure(figsize=(10, 6)) 
 sns.barplot(
     data=entropy_df,
     x='Entropy',
     y='Feature',
     palette='magma'
 )
-plt.title('Shannon Entropy of Ocular Disease Features (Base 2)', fontsize=16) # 英文標題
-plt.xlabel('Entropy Value (Base 2)') # 英文 X 軸標籤
-plt.ylabel('Disease Feature') # 英文 Y 軸標籤
+plt.title('Shannon Entropy of Ocular Disease Features (Base 2)', fontsize=16) 
+plt.xlabel('Entropy Value (Base 2)') 
+plt.ylabel('Disease Feature') 
 plt.grid(axis='x', linestyle='--')
 plt.tight_layout()
-pdf_pages.savefig(fig_12) # Save to PDF
-plt.close(fig_12) # Close figure
+# 移除 pdf_pages.savefig(fig_12) 
+plt.show() # 新增：執行時顯示圖表
+plt.close(fig_12) 
 
 
 # ===========================================
@@ -378,7 +374,7 @@ print(mi_df.to_markdown(index=False, floatfmt=".4f"))
 
 
 # --- 視覺化互信息長條圖 ---
-fig_13 = plt.figure(figsize=(10, 6)) # Use explicit fig object
+fig_13 = plt.figure(figsize=(10, 6)) 
 sns.barplot(
     data=mi_df,
     x='Mutual Information (MI)',
@@ -390,13 +386,15 @@ plt.xlabel('Mutual Information Value')
 plt.ylabel('Disease Feature') 
 plt.grid(axis='x', linestyle='--')
 plt.tight_layout()
-pdf_pages.savefig(fig_13) # Save to PDF
-plt.close(fig_13) # Close figure
+# 移除 pdf_pages.savefig(fig_13) 
+plt.show() # 新增：執行時顯示圖表
+plt.close(fig_13) 
+
 
 # ===========================================
 # Step 14. 將處理後的資料和分析結果輸出到 Excel
 # ===========================================
-print(f"\n--- 15. 將結果輸出到 Excel 報告: {excel_output_path} ---")
+print(f"\n--- 14. 將結果輸出到 Excel 報告: {excel_output_path} ---")
 
 # 選擇要輸出的最終數據欄位
 cleaned_data_cols = ['Patient Age', 'Patient Age_z', 'Age_Group'] + disease_cols
