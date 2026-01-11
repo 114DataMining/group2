@@ -1,0 +1,221 @@
+
+
+
+import os, glob, cv2
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from google.colab import drive
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import (roc_curve, auc, precision_recall_fscore_support, accuracy_score)
+from imblearn.under_sampling import RandomUnderSampler
+from lime import lime_image
+from skimage.segmentation import mark_boundaries
+from tensorflow.keras.applications import ResNet50V2
+from tensorflow.keras import layers, models, optimizers, regularizers
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+
+
+# ==========================================
+# 1. 環境設定與資料讀取
+# ==========================================
+drive.mount('/content/drive')
+DATA_PATH = "/content/drive/MyDrive/CNN眼睛識別/Processed_Images"
+
+
+all_files = []
+for label in [0, 1]:
+   for f in glob.glob(os.path.join(DATA_PATH, str(label), "*.*")):
+       all_files.append({'fn': f, 'label': label})
+all_df = pd.DataFrame(all_files)
+
+
+def print_dist(labels, name):
+   unique, counts = np.unique(labels, return_counts=True)
+   dist = dict(zip(unique, counts))
+   c0, c1 = dist.get(0, 0), dist.get(1, 0)
+   total = c0 + c1
+   share = (c1/total)*100 if total > 0 else 0
+   print(f"  {name: <18}: 類別0: {c0:>4} | 類別1: {c1:>4} | 總計: {total:>5} | 佔比: {share:>6.1f}%(1)")
+
+
+# ==========================================
+# 2. 特徵提取 (使用 ResNet50V2 預訓練模型)
+# ==========================================
+IMG_SIZE = (224, 224)
+base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(224,224,3), pooling='avg')
+base_model.trainable = False
+
+
+data_gen = ImageDataGenerator(rescale=1./255)
+all_gen = data_gen.flow_from_dataframe(all_df, x_col='fn', y_col='label', target_size=IMG_SIZE,
+                                     class_mode='raw', batch_size=32, shuffle=False)
+
+
+print("\n🚀 正在提取影像特徵...")
+X_all_feat = base_model.predict(all_gen, verbose=1)
+y_all_labels = all_df['label'].values
+
+
+# ==========================================
+# 3. 5-Fold 交叉驗證與模型訓練
+# ==========================================
+MANUAL_THRESHOLD = 0.50  # 修正後的門檻值
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+
+train_metrics_all = []
+test_metrics_all = []
+custom_class_weights = {0: 1.0, 1: 9.0} # 1類猜錯處罰9倍
+
+
+for fold, (train_idx, test_idx) in enumerate(skf.split(X_all_feat, y_all_labels), 1):
+   print(f"\n" + "="*90)
+   print(f"🌀 Fold {fold}/5 執行中")
+   print(f"配置: 1:1下採樣 | 無早停 | L2(0.01) | 權重(1:9) | 門檻: {MANUAL_THRESHOLD}")
+   print("="*90)
+
+
+   # 資料切分
+   X_train_raw, X_test = X_all_feat[train_idx], X_all_feat[test_idx]
+   y_train_raw, y_test = y_all_labels[train_idx], y_all_labels[test_idx]
+
+
+   # 輸出原始分佈
+   print("📊 [Step 1] 原始資料分佈:")
+   print_dist(y_train_raw, "訓練集 (原始)")
+   print_dist(y_test, "測試集 (原始)")
+
+
+   # 執行 1:1 下採樣 (Undersampling)
+   rus = RandomUnderSampler(sampling_strategy=1.0, random_state=42)
+   X_res, y_res = rus.fit_resample(X_train_raw, y_train_raw)
+
+
+   print("\n📉 [Step 2] 平衡後分佈:")
+   print_dist(y_res, "訓練集 (下採樣後)")
+   print("-" * 90)
+
+
+   # 建立模型 (加入 L2 正則化)
+   model = models.Sequential([
+       layers.Input(shape=(X_all_feat.shape[1],)),
+       layers.Dense(512, activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+       layers.BatchNormalization(),
+       layers.Dropout(0.4),
+       layers.Dense(128, activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+       layers.Dropout(0.3),
+       layers.Dense(1, activation='sigmoid')
+   ])
+
+
+   model.compile(optimizer=optimizers.Adam(learning_rate=5e-5),
+                 loss='binary_crossentropy',
+                 metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
+
+
+   # 訓練模型 (移除 EarlyStopping)
+   history = model.fit(
+       X_res, y_res,
+       validation_data=(X_test, y_test),
+       epochs=80,
+       batch_size=64,
+       verbose=0,
+       class_weight=custom_class_weights,
+       callbacks=[ReduceLROnPlateau(monitor='val_auc', factor=0.5, patience=5)]
+   )
+
+
+   # --- 評估訓練集 (計算訓練指標) ---
+   t_probs = model.predict(X_res, verbose=0).flatten()
+   t_pred = (t_probs > MANUAL_THRESHOLD).astype(int)
+   t_acc = accuracy_score(y_res, t_pred)
+   t_prec, t_rec, t_f1, _ = precision_recall_fscore_support(y_res, t_pred, average='binary', zero_division=0)
+   t_fpr, t_tpr, _ = roc_curve(y_res, t_probs)
+   t_auc = auc(t_fpr, t_tpr)
+   train_metrics_all.append([t_acc, t_prec, t_rec, t_f1, t_auc])
+
+
+   # --- 評估測試集 (計算測試指標) ---
+   v_probs = model.predict(X_test, verbose=0).flatten()
+   v_pred = (v_probs > MANUAL_THRESHOLD).astype(int)
+   v_acc = accuracy_score(y_test, v_pred)
+   v_prec, v_rec, v_f1, _ = precision_recall_fscore_support(y_test, v_pred, average='binary', zero_division=0)
+   v_fpr, v_tpr, _ = roc_curve(y_test, v_probs)
+   v_auc = auc(v_fpr, v_tpr)
+   test_metrics_all.append([v_acc, v_prec, v_rec, v_f1, v_auc])
+
+
+   # 繪製圖表
+   fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4))
+   ax1.plot(history.history['loss'], label='Train Loss')
+   ax1.plot(history.history['val_loss'], label='Test Loss')
+   ax1.set_title(f'Fold {fold} Loss Curve'); ax1.legend()
+  
+   ax2.plot(v_fpr, v_tpr, color='red', label=f'Test AUC={v_auc:.4f}')
+   ax2.plot(t_fpr, t_tpr, color='blue', linestyle='--', alpha=0.3, label=f'Train AUC={t_auc:.4f}')
+   ax2.plot([0,1],[0,1],'k--')
+   ax2.set_title(f'Fold {fold} ROC Curve'); ax2.legend()
+   plt.show()
+
+
+# ==========================================
+# 4. 最終報告輸出
+# ==========================================
+cols = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC']
+df_train_res = pd.DataFrame(train_metrics_all, columns=cols)
+df_test_res = pd.DataFrame(test_metrics_all, columns=cols)
+
+
+print("\n" + "═"*60)
+print("🏁 5-Fold 交叉驗證最終統計 (Mean ± Std)")
+print("═"*60)
+print("\n[訓練集 - 平衡後]")
+print(pd.DataFrame({'Mean': df_train_res.mean(), 'Std': df_train_res.std()}).round(4))
+print("\n[測試集 - 原始分佈]")
+print(pd.DataFrame({'Mean': df_test_res.mean(), 'Std': df_test_res.std()}).round(4))
+print("═"*60)
+
+
+# ==========================================
+# 5. XAI 分析 (範例示範)
+# ==========================================
+def run_xai(img_path, trained_model, base_model):
+   img = tf.keras.preprocessing.image.load_img(img_path, target_size=(224, 224))
+   img_arr = tf.keras.preprocessing.image.img_to_array(img) / 255.0
+  
+   # Grad-CAM 邏輯
+   last_conv = base_model.get_layer('post_relu')
+   gm = tf.keras.models.Model([base_model.inputs], [last_conv.output, trained_model(base_model.output)])
+   with tf.GradientTape() as tape:
+       conv_out, preds = gm(np.expand_dims(img_arr, axis=0))
+       loss = preds[:, 0]
+   grads = tape.gradient(loss, conv_out)[0]
+   pooled_grads = tf.reduce_mean(grads, axis=(0, 1))
+   cam = np.dot(conv_out[0], pooled_grads)
+   cam = np.maximum(cam, 0)
+   heatmap = cv2.resize(cam, (224, 224))
+   heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+
+
+   # LIME 邏輯
+   def lp(imgs):
+       return trained_model.predict(base_model.predict(imgs, verbose=0), verbose=0)
+   explainer = lime_image.LimeImageExplainer()
+   exp = explainer.explain_instance(img_arr.astype('double'), lp, top_labels=1, num_samples=100)
+   temp, mask = exp.get_image_and_mask(exp.top_labels[0], positive_only=True, num_features=5, hide_rest=False)
+
+
+   # 顯示
+   plt.figure(figsize=(15, 5))
+   plt.subplot(1,3,1); plt.imshow(img); plt.title("Original"); plt.axis('off')
+   plt.subplot(1,3,2); plt.imshow(img); plt.imshow(heatmap, cmap='jet', alpha=0.5); plt.title("Grad-CAM"); plt.axis('off')
+   plt.subplot(1,3,3); plt.imshow(mark_boundaries(temp, mask)); plt.title("LIME"); plt.axis('off')
+   plt.show()
+
+
+# 針對第一個類別 1 的樣本進行 XAI
+sample_1 = all_df[all_df['label'] == 1].iloc[0]['fn']
+run_xai(sample_1, model, base_model)
