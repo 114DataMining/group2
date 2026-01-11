@@ -1,0 +1,242 @@
+
+
+
+計算出現最多的疾病人數
+
+
+import pandas as pd
+# 讀取你的 data.xlsx
+df = pd.read_excel("/content/drive/MyDrive/CNN眼睛識別/data.xlsx")
+# 要檢查的 8 個欄位
+cols = ["D", "G", "C", "A", "H", "M", "O"]
+# 計算每個欄位中 value == 1 的次數
+count_ones = df[cols].apply(lambda x: (x == 1).sum())
+print("各欄位出現 1 的次數：")
+print(count_ones)
+# 找出出現 1 次數最多的欄位
+max_col = count_ones.idxmax()
+max_val = count_ones.max()
+print("\n最多 1 的欄位：", max_col)
+print("次數：", max_val)
+
+
+
+
+掛載 Google Drive、設定資料路徑、建立輸出資料夾
+
+
+import os
+import pandas as pd
+from google.colab import drive
+# -------------------------------
+# 掛載 Google Drive
+# -------------------------------
+drive.mount('/content/drive')
+# -------------------------------
+# 路徑設定
+# -------------------------------
+Images_DIR = "/content/drive/MyDrive/CNN眼睛識別/Images"
+DATA_PATH = "/content/drive/MyDrive/CNN眼睛識別/data.xlsx"
+OUT_Images = "/content/drive/MyDrive/CNN眼睛識別/Processed_Images"
+os.makedirs(OUT_Images, exist_ok=True)
+for label in [0,1]:
+    os.makedirs(os.path.join(OUT_Images, str(label)), exist_ok=True)
+print("資料夾建立完成")
+
+
+
+
+
+
+
+
+讀取 Excel、展開左右眼影像、標註青光眼 (glaucoma)
+
+
+# -------------------------------
+# 讀取 Excel 資料
+# -------------------------------
+df = pd.read_excel(DATA_PATH)
+print("原始資料筆數：", len(df))
+print(df.head())
+# -------------------------------
+# 展開左右眼，每張圖片當作一筆資料，標註 glaucoma
+# -------------------------------
+rows = []
+for _, row in df.iterrows():
+    left_label = 1 if "glaucoma" in str(row["Left-Diagnostic Keywords"]).lower() else 0
+    rows.append({"filename": row["Left-Fundus"], "label": left_label})
+    right_label = 1 if "glaucoma" in str(row["Right-Diagnostic Keywords"]).lower() else 0
+    rows.append({"filename": row["Right-Fundus"], "label": right_label})
+df_long = pd.DataFrame(rows)
+print("展開後資料筆數：", len(df_long))
+print(df_long.head(65))
+
+
+
+
+
+
+裁切黑色邊框、CLAHE 對比增強、調整影像大小
+
+
+import cv2
+import numpy as np
+import os
+# -------------------------------
+# 前處理函式
+# -------------------------------
+def crop_black_circle(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) == 0:
+        return img
+    cnt = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(cnt)
+    return img[y:y+h, x:x+w]
+def apply_CLAHE(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    merged = cv2.merge((l, a, b))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+def preprocess_fundus(input_path, output_path, size=224):
+    img = cv2.imread(input_path)
+    if img is None:
+        print("⚠ 圖片讀取失敗：", input_path)
+        return
+    img = crop_black_circle(img)
+    img = apply_CLAHE(img)
+    img = cv2.resize(img, (size, size))
+    cv2.imwrite(output_path, img)
+# -------------------------------
+# 單張圖片處理函式
+# -------------------------------
+def process_file(row):
+    fname = row["filename"]
+    label = str(row["label"])
+    src_path = os.path.join(Images_DIR, fname)
+    dst_path = os.path.join(OUT_Images, label, fname)
+    if not os.path.exists(src_path):
+        print("⚠ 圖片不存在:", src_path)
+        return None
+    preprocess_fundus(src_path, dst_path)
+    return fname
+import cv2
+import numpy as np
+import os
+# -------------------------------
+# 前處理函式
+# -------------------------------
+def crop_black_circle(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) == 0:
+        return img
+    cnt = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(cnt)
+    return img[y:y+h, x:x+w]
+def apply_CLAHE(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    merged = cv2.merge((l, a, b))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+def preprocess_fundus(input_path, output_path, size=224):
+    img = cv2.imread(input_path)
+    if img is None:
+        print("⚠ 圖片讀取失敗：", input_path)
+        return
+    img = crop_black_circle(img)
+    img = apply_CLAHE(img)
+    img = cv2.resize(img, (size, size))
+    cv2.imwrite(output_path, img)
+# -------------------------------
+# 單張圖片處理函式
+# -------------------------------
+def process_file(row):
+    fname = row["filename"]
+    label = str(row["label"])
+    src_path = os.path.join(Images_DIR, fname)
+    dst_path = os.path.join(OUT_Images, label, fname)
+    if not os.path.exists(src_path):
+        print("⚠ 圖片不存在:", src_path)
+        return None
+    preprocess_fundus(src_path, dst_path)
+    return fname
+
+
+
+
+分批處理影像，使用 ThreadPoolExecutor 加速前處理，1/0分資料夾
+
+
+import time
+from concurrent.futures import ThreadPoolExecutor
+# -------------------------------
+# 批次處理函式
+# -------------------------------
+BATCH_SIZE = 500
+NUM_WORKERS = 8
+def batch_process(df_subset, dataset_name="dataset"):
+    total_files = len(df_subset)
+    if total_files == 0:
+        print(f"❌ {dataset_name} 無資料可處理！")
+        return
+    start_time = time.time()
+    for start_idx in range(0, total_files, BATCH_SIZE):
+        end_idx = min(start_idx + BATCH_SIZE, total_files)
+        batch_rows = df_subset.iloc[start_idx:end_idx]
+        batch_start = time.time()
+        print(f"\n📦 處理 {dataset_name} 第 {start_idx+1}-{end_idx} 張圖片...")
+        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            for global_idx, _ in enumerate(executor.map(process_file,
+                                                         [row for _, row in batch_rows.iterrows()]),
+                                           start=start_idx+1):
+                elapsed = time.time() - start_time
+                processed = global_idx
+                remaining = total_files - processed
+                eta = elapsed / processed * remaining if processed > 0 else 0
+                print(f"處理中：{global_idx}/{total_files} ({global_idx/total_files*100:.1f}%) - ETA {eta/60:.1f} 分鐘", end="\r")
+        batch_elapsed = time.time() - batch_start
+        print(f"\n✅ 本批完成，用時 {batch_elapsed:.1f} 秒")
+    total_elapsed = time.time() - start_time
+    print(f"\n🎉 {dataset_name} 全部圖片前處理完成！總用時 {total_elapsed/60:.1f} 分鐘")
+# -------------------------------
+# 執行批次處理
+# -------------------------------
+print("開始處理全部資料...")
+batch_process(df_long, dataset_name="all images")
+
+
+
+
+確定1/0分資料夾裡個數
+
+
+import os
+# 設定路徑
+base_path = "/content/drive/MyDrive/CNN眼睛識別/Processed_Images"
+folders = ["0", "1"]
+print(f"📂 正在統計路徑：{base_path}\n")
+total_count = 0
+for folder in folders:
+    folder_path = os.path.join(base_path, folder)
+    if os.path.exists(folder_path):
+        # 只計算常見的圖片格式
+        files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        count = len(files)
+        total_count += count
+        label_name = "正常 (Normal)" if folder == "0" else "青光眼 (Glaucoma)"
+        print(f"📁 資料夾 【{folder}】 ({label_name})")
+        print(f"   └── 圖片數量：{count} 筆")
+    else:
+        print(f"❌ 找不到資料夾：{folder_path}")
+print("-" * 30)
+print(f"總計圖片總數：{total_count} 筆")
+
+
