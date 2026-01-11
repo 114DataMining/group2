@@ -1,4 +1,4 @@
-
+ResNet50V2,1:1下採樣類別平衡,五折交叉驗證
 
 
 import os, glob, cv2
